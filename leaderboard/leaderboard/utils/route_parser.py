@@ -44,7 +44,7 @@ class RouteParser(object):
         return final_dict  # the file has a current maps name that is an one element vec
 
     @staticmethod
-    def parse_routes_file(route_filename, scenario_file, single_route=None):
+    def parse_routes_file(route_filename, scenario_file, single_route_id=''):
         """
         Returns a list of route elements.
         :param route_filename: the path to a set of routes.
@@ -57,7 +57,7 @@ class RouteParser(object):
         for route in tree.iter("route"):
 
             route_id = route.attrib['id']
-            if single_route and route_id != single_route:
+            if single_route_id and route_id != single_route_id:
                 continue
 
             new_config = RouteScenarioConfiguration()
@@ -164,11 +164,11 @@ class RouteParser(object):
             dx = float(waypoint1['x']) - wtransform.location.x
             dy = float(waypoint1['y']) - wtransform.location.y
             dz = float(waypoint1['z']) - wtransform.location.z
-            dpos = math.sqrt(dx * dx + dy * dy + dz * dz)
+            dpos = math.sqrt(dx * dx + dy * dy)
 
             dyaw = (float(waypoint1['yaw']) - wtransform.rotation.yaw) % 360
 
-            return dpos < TRIGGER_THRESHOLD \
+            return dz < TRIGGER_THRESHOLD and dpos < TRIGGER_THRESHOLD \
                 and (dyaw < TRIGGER_ANGLE_THRESHOLD or dyaw > (360 - TRIGGER_ANGLE_THRESHOLD))
 
         match_position = 0
@@ -228,11 +228,7 @@ class RouteParser(object):
         if scenario == 'Scenario7':
             for tuple_wp_turn in trajectory[match_position:]:
                 if check_this_waypoint(tuple_wp_turn):
-                    if RoadOption.LEFT == tuple_wp_turn[1]:
-                        subtype = 'S7left'
-                    elif RoadOption.RIGHT == tuple_wp_turn[1]:
-                        subtype = 'S7right'
-                    elif RoadOption.STRAIGHT == tuple_wp_turn[1]:
+                    if RoadOption.STRAIGHT == tuple_wp_turn[1]:
                         subtype = 'S7opposite'
                     else:
                         subtype = None

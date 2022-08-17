@@ -68,17 +68,16 @@ class LeaderboardEvaluator(object):
         self.statistics_manager = statistics_manager
         self.sensors = None
         self.sensor_icons = []
-        self._vehicle_lights = carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam
 
         # First of all, we need to create the client that will send the requests
         # to the simulator. Here we'll assume the simulator is accepting
         # requests in the localhost at port 2000.
-        self.client = carla.Client(args.host, int(args.port))
+        self.client = carla.Client(args.host, args.port)
         if args.timeout:
-            self.client_timeout = float(args.timeout)
+            self.client_timeout = args.timeout
         self.client.set_timeout(self.client_timeout)
 
-        self.traffic_manager = self.client.get_trafficmanager(int(args.trafficManagerPort))
+        self.traffic_manager = self.client.get_trafficmanager(args.traffic_manager_port)
 
         dist = pkg_resources.get_distribution("carla")
         if dist.version != 'leaderboard':
@@ -97,8 +96,8 @@ class LeaderboardEvaluator(object):
         self._start_time = GameTime.get_time()
         self._end_time = None
 
-        # Create the agent timer
-        self._agent_watchdog = Watchdog(int(float(args.timeout)))
+        # Prepare the agent timer
+        self._agent_watchdog = None
         signal.signal(signal.SIGINT, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
@@ -106,7 +105,7 @@ class LeaderboardEvaluator(object):
         Terminate scenario ticking when receiving a signal interrupt
         """
         if self._agent_watchdog and not self._agent_watchdog.get_status():
-            raise RuntimeError("Timeout: Agent took too long to setup")
+            raise RuntimeError("Timeout: Agent took longer than {}s to setup".format(self.client_timeout))
         elif self.manager:
             self.manager.signal_handler(signum, frame)
 
@@ -114,8 +113,6 @@ class LeaderboardEvaluator(object):
         """
         Cleanup and delete actors, ScenarioManager and CARLA world
         """
-
-        self._cleanup()
         if hasattr(self, 'manager') and self.manager:
             del self.manager
         if hasattr(self, 'world') and self.world:
@@ -127,7 +124,7 @@ class LeaderboardEvaluator(object):
         """
 
         # Simulation still running and in synchronous mode?
-        if self.manager and self.manager.get_running_status() \
+        if hasattr(self, 'manager') and self.manager.get_running_status() \
                 and hasattr(self, 'world') and self.world:
             # Reset to asynchronous mode
             settings = self.world.get_settings()
@@ -208,10 +205,10 @@ class LeaderboardEvaluator(object):
 
         CarlaDataProvider.set_client(self.client)
         CarlaDataProvider.set_world(self.world)
-        CarlaDataProvider.set_traffic_manager_port(int(args.trafficManagerPort))
+        CarlaDataProvider.set_traffic_manager_port(args.traffic_manager_port)
 
         self.traffic_manager.set_synchronous_mode(True)
-        self.traffic_manager.set_random_device_seed(int(args.trafficManagerSeed))
+        self.traffic_manager.set_random_device_seed(args.traffic_manager_seed)
 
         # Wait for the world to be ready
         if CarlaDataProvider.is_sync_mode():
@@ -219,9 +216,10 @@ class LeaderboardEvaluator(object):
         else:
             self.world.wait_for_tick()
 
-        if CarlaDataProvider.get_map().name != town:
+        map_name = CarlaDataProvider.get_map().name.split("/")[-1]
+        if map_name != town:
             raise Exception("The CARLA server uses the wrong map!"
-                            "This scenario requires to use map {}".format(town))
+                            " This scenario requires the use of map {}".format(town))
 
     def _register_statistics(self, config, checkpoint, entry_status, crash_message=""):
         """
@@ -257,6 +255,7 @@ class LeaderboardEvaluator(object):
 
         # Set up the user's agent, and the timer to avoid freezing the simulation
         try:
+            self._agent_watchdog = Watchdog(args.timeout)
             self._agent_watchdog.start()
             agent_class_name = getattr(self.module_agent, 'get_entry_point')()
             self.agent_instance = getattr(self.module_agent, agent_class_name)(args.agent_config)
@@ -273,6 +272,7 @@ class LeaderboardEvaluator(object):
                 self.statistics_manager.save_sensors(self.sensor_icons, args.checkpoint)
 
             self._agent_watchdog.stop()
+            self._agent_watchdog = None
 
         except SensorConfigurationInvalid as e:
             # The sensors are invalid -> set the ejecution to rejected and stop
@@ -306,12 +306,8 @@ class LeaderboardEvaluator(object):
             self._load_and_wait_for_world(args, config.town, config.ego_vehicles)
             self._prepare_ego_vehicles(config.ego_vehicles, False)
             scenario = RouteScenario(world=self.world, config=config, debug_mode=args.debug)
+            config.route = scenario.route
             self.statistics_manager.set_scenario(scenario.scenario)
-
-            # Night mode
-            if config.weather.sun_altitude_angle < 0.0:
-                for vehicle in scenario.ego_vehicles:
-                    vehicle.set_light_state(carla.VehicleLightState(self._vehicle_lights))
 
             # Load scenario and run it
             if args.record:
@@ -385,7 +381,7 @@ class LeaderboardEvaluator(object):
         """
         Run the challenge mode
         """
-        route_indexer = RouteIndexer(args.routes, args.scenarios, args.repetitions)
+        route_indexer = RouteIndexer(args.routes, args.scenarios, args.repetitions, args.route_id)
 
         if args.resume:
             route_indexer.resume(args.checkpoint)
@@ -416,21 +412,23 @@ def main():
     parser = argparse.ArgumentParser(description=description, formatter_class=RawTextHelpFormatter)
     parser.add_argument('--host', default='localhost',
                         help='IP of the host server (default: localhost)')
-    parser.add_argument('--port', default='2000', help='TCP port to listen to (default: 2000)')
-    parser.add_argument('--trafficManagerPort', default='8000',
+    parser.add_argument('--port', default=2000, type=int, help='TCP port to listen to (default: 2000)')
+    parser.add_argument('--traffic-manager-port', default=8000, type=int,
                         help='Port to use for the TrafficManager (default: 8000)')
-    parser.add_argument('--trafficManagerSeed', default='0',
+    parser.add_argument('--traffic-manager-seed', default=0, type=int,
                         help='Seed used by the TrafficManager (default: 0)')
     parser.add_argument('--debug', type=int, help='Run with debug output', default=0)
     parser.add_argument('--record', type=str, default='',
                         help='Use CARLA recording feature to create a recording of the scenario')
-    parser.add_argument('--timeout', default="60.0",
+    parser.add_argument('--timeout', default=60.0, type=float,
                         help='Set the CARLA client timeout value in seconds')
 
     # simulation setup
     parser.add_argument('--routes',
                         help='Name of the route to be executed. Point to the route_xml_file to be executed.',
                         required=True)
+    parser.add_argument('--route-id', default='', type=str,
+                        help='Execute a specific route')
     parser.add_argument('--scenarios',
                         help='Name of the scenario annotation file to be mixed with the route.',
                         required=True)
