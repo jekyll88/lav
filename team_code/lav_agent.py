@@ -130,7 +130,6 @@ class LAVAgent(AutonomousAgent):
         
         self.num_frames = 0
 
-
     def destroy(self):
 
         self.waypointer = None
